@@ -1,4 +1,5 @@
 #include <sirius.hpp>
+#include "radial/radial_solver.hpp"
 
 using namespace sirius;
 
@@ -19,6 +20,7 @@ int main(int argn, char** argv)
     args.register_key("--grid_type=","{int} type of the radial grid");
     args.register_key("--num_points=","{int} number of grid points");
     args.register_key("--rmin=","{double} first grid point");
+    args.register_key("--rmax=","{double} last  rid point (grows with element mass)");
     args.register_key("--p=","{double} additional grid parameter");
     args.parse_args(argn, argv);
     if (args.exist("help")) {
@@ -32,8 +34,6 @@ int main(int argn, char** argv)
     printf("Energy of {n,l} states is En = -(1/2) * z^2 / n^2 \n");
     printf("\n");
 
-    sirius::initialize(1);
-
     int num_points{20000};
     if (args.exist("num_points")) {
         num_points = args.value<int>("num_points");
@@ -43,6 +43,10 @@ int main(int argn, char** argv)
     double rmin{1e-7};
     if (args.exist("rmin")) {
         rmin = args.value<double>("rmin");
+    }
+    double rmax{200};
+    if (args.exist("rmax")) {
+        rmin = args.value<double>("rmax");
     }
     double p{1};
     if (args.exist("p")) {
@@ -60,6 +64,8 @@ int main(int argn, char** argv)
         }
     }
 
+    sirius::initialize(1);
+
     //{
     //    auto r = Radial_grid_factory<double>(grid_type, num_points, rmin, 200.0, p);
 
@@ -71,17 +77,16 @@ int main(int argn, char** argv)
 
     //    printf("radial grid: %s\n", r.name().c_str());
     //}
-
+    //
     std::vector<double> err(levels.size());
-    
+
     #pragma omp parallel for
-    for (int j = 0; j < (int)levels.size(); j++)
-    {
+    for (int j = 0; j < (int)levels.size(); j++) {
         int n = levels[j].n;
         int l = levels[j].l;
         int z = levels[j].z;
-        
-        auto radial_grid = Radial_grid_factory<double>(grid_type, num_points, rmin, 200.0 + z * 3.0, p);
+
+        auto radial_grid = Radial_grid_factory<double>(grid_type, num_points, rmin, rmax + z * 2.0, p);
 
         std::vector<double> v(radial_grid.num_points());
         for (int i = 0; i < radial_grid.num_points(); i++) {
@@ -89,17 +94,17 @@ int main(int argn, char** argv)
         }
 
         double enu_exact = -0.5 * std::pow(double(z) / n, 2);
-        
+
         Bound_state bound_state(relativity_t::none, z, n, l, 0, radial_grid, v, enu_exact);
 
         double enu = bound_state.enu();
 
-        double rel_err = std::abs(1 - enu / enu_exact);
+        double rel_err = std::abs(enu - enu_exact) / std::abs(enu_exact);
 
         /* check residual */
         auto& p = bound_state.p();
 
-        auto rg1 = radial_grid.segment(radial_grid.index_of(200));
+        auto rg1 = radial_grid.segment(radial_grid.index_of(rmax));
 
         Spline<double> s(rg1);
         for (int i = 0; i < rg1.num_points(); i++) {
@@ -123,20 +128,17 @@ int main(int argn, char** argv)
     }
 
     FILE* fout = fopen("err.dat", "w");
-    for (int j = 0; j < (int)err.size(); j++)
-    {
+    for (int j = 0; j < (int)err.size(); j++) {
         fprintf(fout, "%i %20.16f\n", j, err[j]);
     }
     fclose(fout);
 
     json dict;
     std::vector<int> xaxis;
-    
+
     int j = 0;
-    for (int n = 1; n <= 20; n++)
-    {
-        for (int l = 0; l <= n - 1; l++)
-        {
+    for (int n = 1; n <= 20; n++) {
+        for (int l = 0; l <= n - 1; l++) {
             xaxis.push_back(j);
             j++;
         }
@@ -147,8 +149,7 @@ int main(int argn, char** argv)
     std::vector<std::string> xaxis_tick_labels;
 
     j = 0;
-    for (int n = 1; n <= 20; n++)
-    {
+    for (int n = 1; n <= 20; n++) {
         std::stringstream s;
         s << "n=" << n;
         xaxis_ticks.push_back(j);
@@ -161,37 +162,32 @@ int main(int argn, char** argv)
     dict["plot"] = json::array();
 
     int i = 0;
-    for (int k = 0; k < 10; k++)
-    {
+    for (int k = 0; k < 10; k++) {
         int z = 1 + k * 10;
         std::stringstream s;
         s << "z=" << z;
 
         j = 0;
         xaxis.clear();
-        for (int n = 1; n <= 5 + k; n++)
-        {
-            for (int l = 0; l <= n - 1; l++)
-            {
+        for (int n = 1; n <= 5 + k; n++) {
+            for (int l = 0; l <= n - 1; l++) {
                 xaxis.push_back(j);
                 j++;
             }
         }
-        
+
         std::vector<double> yvalues;
 
         j = 0;
-        for (int n = 1; n <= 5 + k; n++)
-        {
-            for (int l = 0; l <= n - 1; l++)
-            {
+        for (int n = 1; n <= 5 + k; n++) {
+            for (int l = 0; l <= n - 1; l++) {
                 yvalues.push_back(err[i++]);
             }
         }
-        
+
         dict["plot"].push_back(json::object({{"label", s.str()}, {"xaxis", xaxis}, {"yvalues", yvalues}}));
     }
-    
+
     std::ofstream ofs("out.json", std::ofstream::out | std::ofstream::trunc);
     ofs << dict.dump(4);
 

@@ -187,7 +187,6 @@ json DFT_ground_state::find(double density_tol, double energy_tol, double itsol_
     Density rho1(ctx_);
 
     std::stringstream s;
-    s << std::endl;
     s << "density_tol  : " << density_tol << std::endl
       << "energy_tol   : " << energy_tol << std::endl
       << "itsol_tol    : " << itsol_tol << std::endl

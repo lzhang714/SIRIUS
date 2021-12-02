@@ -27,7 +27,6 @@
 
 #include "atomic_data.hpp"
 #include "geometry3d.hpp"
-#include "radial/radial_solver.hpp"
 #include "context/simulation_parameters.hpp"
 #include "radial_functions_index.hpp"
 #include "basis_functions_index.hpp"

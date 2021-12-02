@@ -1,4 +1,5 @@
 #include <sirius.hpp>
+#include "radial/radial_solver.hpp"
 
 using namespace sirius;
 

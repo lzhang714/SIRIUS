@@ -25,10 +25,14 @@
 #ifndef __RADIAL_SOLVER_HPP__
 #define __RADIAL_SOLVER_HPP__
 
+#include <gsl/gsl_errno.h>
+#include <gsl/gsl_matrix.h>
+#include <gsl/gsl_odeiv2.h>
 #include <tuple>
 #include "spline.hpp"
 #include "constants.hpp"
 #include "typedefs.hpp"
+#include "utils/rte.hpp"
 
 namespace sirius {
 
@@ -61,8 +65,10 @@ namespace sirius {
  *  we arrive to the following equation for \f$ q'(r) \f$:
  *  \f[
  *    p''(r) = 2q'(r) + \frac{p'(r)}{r} - \frac{p(r)}{r^2} = 2q'(r) + \frac{2q(r)}{r} + \frac{p(r)}{r^2} -
- * \frac{p(r)}{r^2} \f] \f[ q'(r) = \frac{1}{2}p''(r) - \frac{q(r)}{r} = \big(V_{eff}(r) - E\big) p(r) - \frac{q(r)}{r}
- * - \chi(r) \f] Final expression for a linear system of differential equations for m-th energy derivative is:
+ *      \frac{p(r)}{r^2} \f] \f[ q'(r) =
+ *    \frac{1}{2}p''(r) - \frac{q(r)}{r} = \big(V_{eff}(r) - E\big) p(r) - \frac{q(r)}{r} - \chi(r) 
+ *  \f]
+ *  Final expression for a linear system of differential equations for m-th energy derivative is:
  *  \f{eqnarray*}{
  *    p'(r) &=& 2q(r) + \frac{p(r)}{r} \\
  *    q'(r) &=& \big(V_{eff}(r) - E\big) p(r) - \frac{q(r)}{r} - \chi(r)
@@ -82,9 +88,8 @@ namespace sirius {
  *  For m=2:
  *  \f{eqnarray*}{
  *    \ddot{p}'(r) &=& 2M\ddot{q}(r) + \frac{\ddot{p}(r)}{r} + 2 \alpha^2 \dot{q}(r) \\
- *    \ddot{q}'(r) &=& \big(V(r) - E + \frac{\ell(\ell+1)}{2Mr^2}\big) \ddot{p}(r) - \frac{\ddot{q}(r)}{r} - 2 \big(1 +
- * \frac{\ell(\ell+1)\alpha^2}{4M^2r^2}\big)\dot{p}(r)
- *      + \frac{\ell(\ell+1)\alpha^4}{4M^3r^2} p(r)
+ *    \ddot{q}'(r) &=& \big(V(r) - E + \frac{\ell(\ell+1)}{2Mr^2}\big) \ddot{p}(r) - \frac{\ddot{q}(r)}{r} -
+ *     2 \big(1 + \frac{\ell(\ell+1)\alpha^2}{4M^2r^2}\big)\dot{p}(r) + \frac{\ell(\ell+1)\alpha^4}{4M^3r^2} p(r)
  *  \f}
  *
  *  Derivation of IORA.
@@ -143,6 +148,189 @@ class Radial_solver
 
     /// Electronic part of potential.
     Spline<double> ve_;
+
+    int integrate_forward_rk4_gsl(double enu__, int l__, int k__, Spline<double> const& chi_p__,
+                                  Spline<double> const& chi_q__, std::vector<double>& p__, std::vector<double>& dpdr__,
+                                  std::vector<double>& q__, std::vector<double>& dqdr__) const
+    {
+        struct params
+        {
+            int ir;
+            double t0;
+            double enu;
+            int l;
+            int zn;
+            Spline<double> const* ve;
+        };
+
+        auto func = [](double t, double const* y, double* f, void *params__) -> int
+        {
+            params* p = static_cast<params*>(params__);
+            double dt = t - p->t0;
+            double ll_half = p->l * (p->l + 1) / 2.0;
+            double veff = p->ve->operator()(p->ir, dt) - p->zn / t + ll_half / t / t;
+            /* p' = 2 * q + p / r */
+            f[0] = 2 * y[1] + y[0] / t;
+            /* q' = (V_eff - E) * p - q / r - chi */
+            f[1] = (veff - p->enu) * y[0] - y[1] / t;
+            return GSL_SUCCESS;
+        };
+
+        auto jac = [](double t, double const* y, double *dfdy, double* dfdt, void *params__) -> int
+        {
+            params* p = static_cast<params*>(params__);
+            double dt = t - p->t0;
+            double ll_half = p->l * (p->l + 1) / 2.0;
+            double veff = p->ve->operator()(p->ir, dt) - p->zn / t + ll_half / t / t;
+
+            auto dfdy_mat = gsl_matrix_view_array(dfdy, 2, 2);
+            auto m = &dfdy_mat.matrix;
+            gsl_matrix_set(m, 0, 0, 1.0 / t);
+            gsl_matrix_set(m, 0, 1, 2.0);
+            gsl_matrix_set(m, 1, 0, veff - p->enu);
+            gsl_matrix_set(m, 1, 1, -1.0 / t);
+            dfdt[0] = -y[0] / t / t;
+            dfdt[1] = y[0] * (p->ve->deriv(1, p->ir, dt) + p->zn / t / t - ll_half * 2.0 / t / t / t) +
+                      y[1] / t / t;
+            return GSL_SUCCESS;
+        };
+
+
+        /* try to find classical turning point */
+        int idx_ctp{-1};
+        for (int ir = 0; ir < radial_grid_.num_points(); ir++) {
+            if (ve_(ir) - zn_ * radial_grid_.x_inv(ir) > enu__) {
+                idx_ctp = ir;
+                break;
+            }
+        }
+        /* if we didn't fint the classical turning point, take half of the grid */
+        if (idx_ctp == -1) {
+            idx_ctp = radial_grid_.index_of(radial_grid_.last() / 2);
+        }
+        int last{0};
+
+        params p;
+        p.enu = enu__;
+        p.l = l__;
+        p.zn = zn_;
+        p.ve = &ve_;
+
+        gsl_odeiv2_system sys = {func, jac, 2, &p};
+
+        const double epsabs = 1e-8;
+        const gsl_odeiv2_step_type* T = gsl_odeiv2_step_rk8pd;
+        gsl_odeiv2_step* s = gsl_odeiv2_step_alloc(T, 2);
+        gsl_odeiv2_control* c = gsl_odeiv2_control_y_new(epsabs, 0.0);
+        gsl_odeiv2_evolve* e = gsl_odeiv2_evolve_alloc(2);
+
+        double h = radial_grid_.dx(0) / 10.0;
+
+        //gsl_odeiv2_driver* d = gsl_odeiv2_driver_alloc_y_new(&sys, gsl_odeiv2_step_rk8pd, radial_grid_.dx(0) / 10.0,
+        //        epsabs, 0.0);
+
+        double t = radial_grid_[0];
+        double y[2];
+        y[0] = std::pow(t, l__ + 1);
+        y[1] = 0.5 * std::pow(t, l__) * l__;
+
+        p__[0] = y[0];
+        q__[0] = y[1];
+
+        for (p.ir = 0; p.ir < radial_grid_.num_points() - 1; p.ir++) {
+            p.t0 = radial_grid_[p.ir];
+            double t1 = radial_grid_[p.ir + 1];
+            int count{0};
+            while (t < t1) {
+                int status = gsl_odeiv2_evolve_apply(e, c, s, &sys, &t, t1, &h, y);
+                if (status != GSL_SUCCESS) {
+                    RTE_THROW("error in gsl_odeiv2_driver_apply()");
+                }
+                count++;
+            }
+            std::cout << "move from " << p.t0 << " to " << t1 << " in " << count << " steps" << std::endl;
+            ////std::cout << "p.ir=" << p.ir << std::endl;
+            //int status = gsl_odeiv2_driver_apply(d, &t, t1, y);
+            ////std::cout << "y=" << y[0] << " " << y[1] << std::endl;
+            //if (status != GSL_SUCCESS) {
+            //    RTE_THROW("error in gsl_odeiv2_driver_apply()");
+            //}
+            if (std::abs(y[0]) > 1e4) {
+                /* if we didn't expect the overflow and it happened, or it happened before the
+                 * classical turning point, it's bad */
+                if (p.ir < idx_ctp) {
+                    //std::stringstream s;
+                    //s << "overflow before the classical turning point ";
+                    //s << "for atom type with zn = " << zn_ << ", l = " << l__ << ", enu = " << enu__ << ", ir = " << i
+                    //  << ", idx_ctp: " << idx_ctp;
+                    for (int j = 0; j <= p.ir; j++) {
+                        p__[j] /= 1e4;
+                        q__[j] /= 1e4;
+                    }
+                    y[0] /= 1e4;
+                    y[1] /= 1e4;
+
+                    // WARNING(s);
+                } else { /* if overflow happened after the classical turning point, it's ok */
+                    last = p.ir;
+                    break;
+                }
+            }
+
+            p__[p.ir + 1] = y[0];
+            q__[p.ir + 1] = y[1];
+        }
+        gsl_odeiv2_evolve_free(e);
+        gsl_odeiv2_control_free(c);
+        gsl_odeiv2_step_free(s);
+
+        //gsl_odeiv2_driver_free(d);
+
+        if (last) {
+            /* find the minimum value of the "tail" */
+            double pmax = std::abs(p__[last]);
+            /* go towards the origin */
+            for (int j = last; j >= 0; j--) {
+                if (std::abs(p__[j]) < pmax) {
+                    pmax = std::abs(p__[j]);
+                } else {
+                    /* we may go through zero here and miss one node,
+                     * so stay on the safe side with one extra point */
+                    last = j + 1;
+                    break;
+                }
+            }
+            /* zero the tail */
+            for (int j = last; j < radial_grid_.num_points(); j++) {
+                p__[j] = 0;
+                q__[j] = 0;
+            }
+        }
+
+        int nr = radial_grid_.num_points();
+        double ll_half = l__ * (l__ + 1) / 2.0;
+
+        /* get number of nodes */
+        int nn{0};
+        for (int i = 0; i < nr - 1; i++) {
+            if (p__[i] * p__[i + 1] < 0.0) {
+                nn++;
+            }
+        }
+
+        for (int i = 0; i < nr; i++) {
+            double V  = ve_(i) - zn_ * radial_grid_.x_inv(i);
+            //double M  = rel_mass(enu__, V);
+            double v1 = ll_half / std::pow(radial_grid_[i], 2);
+
+            /* P' = 2MQ + \frac{P}{r} */
+            dpdr__[i] = 2 * q__[i] + p__[i] * radial_grid_.x_inv(i);
+
+            /* Q' = (V - E + \frac{\ell(\ell + 1)}{2 M r^2}) P - \frac{Q}{r} */
+            dqdr__[i] = (V - enu__ + v1) * p__[i] - q__[i] * radial_grid_.x_inv(i) + chi_q__(i);
+        }
+        return nn;
+    }
 
     /// Integrate system of two first-order differential equations forward starting from the origin.
     /** Use Runge-Kutta 4th order method */

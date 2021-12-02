@@ -22,6 +22,7 @@
 #include "mixer/anderson_mixer.hpp"
 #include "unit_cell/atomic_conf.hpp"
 #include "potential/xc_functional.hpp"
+#include "radial/radial_solver.hpp"
 
 double const rmin{1e-5};
 

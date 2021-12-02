@@ -26,6 +26,7 @@
 #define __HUBBARD_ORBITALS_DESCRIPTOR_HPP__
 
 #include "sht/sht.hpp"
+#include "radial/spline.hpp"
 
 namespace sirius {
 
