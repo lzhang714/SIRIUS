@@ -904,8 +904,6 @@ void generate_atom_file(Free_atom&         a,
 
 int main(int argn, char** argv)
 {
-    sirius::initialize(true);
-
     /* handle command line arguments */
     cmd_args args;
     args.register_key("--symbol=", "{string} symbol of a chemical element");
@@ -944,6 +942,8 @@ int main(int argn, char** argv)
         std::printf("\n");
         return 0;
     }
+
+    sirius::initialize(true);
 
     auto symbol = args.value<std::string>("symbol");
 
