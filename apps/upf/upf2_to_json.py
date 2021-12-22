@@ -105,7 +105,7 @@ def parse_non_local(upf_dict, root):
     # ------------------------------------
     node = root.findall('./PP_NONLOCAL/PP_AUGMENTATION')[0]
 
-    if node.attrib['q_with_l'] != 'T':
+    if not (node.attrib['q_with_l'] == 'T' or node.attrib['q_with_l'] == 'true'):
         print("Don't know how to parse this 'q_with_l != T'")
         sys.exit(0)
 
@@ -362,6 +362,7 @@ def main():
         re.sub(r"(?<=[0-9]),\s\n\s*(?=[-|0-9])", r", ",
                json.dumps(pp_dict, indent=2)))
     fout.close()
+
 
 
 if __name__ == "__main__":

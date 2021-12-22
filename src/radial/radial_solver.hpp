@@ -149,9 +149,11 @@ class Radial_solver
     /// Electronic part of potential.
     Spline<double> ve_;
 
-    int integrate_forward_rk4_gsl(double enu__, int l__, int k__, Spline<double> const& chi_p__,
-                                  Spline<double> const& chi_q__, std::vector<double>& p__, std::vector<double>& dpdr__,
-                                  std::vector<double>& q__, std::vector<double>& dqdr__) const
+  public:
+
+    int integrate_forward_gsl(double enu__, int l__, int k__, Spline<double> const& chi_p__,
+                              Spline<double> const& chi_q__, std::vector<double>& p__, std::vector<double>& dpdr__,
+                              std::vector<double>& q__, std::vector<double>& dqdr__, bool bound_state__) const
     {
         struct params
         {
@@ -195,21 +197,6 @@ class Radial_solver
             return GSL_SUCCESS;
         };
 
-
-        /* try to find classical turning point */
-        int idx_ctp{-1};
-        for (int ir = 0; ir < radial_grid_.num_points(); ir++) {
-            if (ve_(ir) - zn_ * radial_grid_.x_inv(ir) > enu__) {
-                idx_ctp = ir;
-                break;
-            }
-        }
-        /* if we didn't fint the classical turning point, take half of the grid */
-        if (idx_ctp == -1) {
-            idx_ctp = radial_grid_.index_of(radial_grid_.last() / 2);
-        }
-        int last{0};
-
         params p;
         p.enu = enu__;
         p.l = l__;
@@ -218,7 +205,7 @@ class Radial_solver
 
         gsl_odeiv2_system sys = {func, jac, 2, &p};
 
-        const double epsabs = 1e-8;
+        const double epsabs = 1e-6;
         const gsl_odeiv2_step_type* T = gsl_odeiv2_step_rk8pd;
         gsl_odeiv2_step* s = gsl_odeiv2_step_alloc(T, 2);
         gsl_odeiv2_control* c = gsl_odeiv2_control_y_new(epsabs, 0.0);
@@ -237,88 +224,97 @@ class Radial_solver
         p__[0] = y[0];
         q__[0] = y[1];
 
-        for (p.ir = 0; p.ir < radial_grid_.num_points() - 1; p.ir++) {
-            p.t0 = radial_grid_[p.ir];
+        int last_point{radial_grid_.num_points() - 1};
+        bool renorm{true};
+
+        for (p.ir = 0; p.ir < last_point; p.ir++) {
+            p.t0 = t;
             double t1 = radial_grid_[p.ir + 1];
-            int count{0};
+            h = radial_grid_.dx(p.ir);
             while (t < t1) {
                 int status = gsl_odeiv2_evolve_apply(e, c, s, &sys, &t, t1, &h, y);
                 if (status != GSL_SUCCESS) {
-                    RTE_THROW("error in gsl_odeiv2_driver_apply()");
+                    std::stringstream s;
+                    s << "error in gsl_odeiv2_driver_apply()" << std::endl
+                      << "  ir = " << p.ir << std::endl
+                      << "  t = " << t << std::endl
+                      << "  t1 = " << t1 << std::endl
+                      << "  h = " << h << std::endl
+                      << "  enu = " << enu__ << std::endl
+                      << "  l = " << l__ << std::endl
+                      << "  z = " << zn_;
+                    std::cout << s.str() << std::endl;
+
+                    RTE_THROW(s);
                 }
-                count++;
             }
-            std::cout << "move from " << p.t0 << " to " << t1 << " in " << count << " steps" << std::endl;
-            ////std::cout << "p.ir=" << p.ir << std::endl;
             //int status = gsl_odeiv2_driver_apply(d, &t, t1, y);
-            ////std::cout << "y=" << y[0] << " " << y[1] << std::endl;
             //if (status != GSL_SUCCESS) {
             //    RTE_THROW("error in gsl_odeiv2_driver_apply()");
             //}
-            if (std::abs(y[0]) > 1e4) {
-                /* if we didn't expect the overflow and it happened, or it happened before the
-                 * classical turning point, it's bad */
-                if (p.ir < idx_ctp) {
-                    //std::stringstream s;
-                    //s << "overflow before the classical turning point ";
-                    //s << "for atom type with zn = " << zn_ << ", l = " << l__ << ", enu = " << enu__ << ", ir = " << i
-                    //  << ", idx_ctp: " << idx_ctp;
-                    for (int j = 0; j <= p.ir; j++) {
-                        p__[j] /= 1e4;
-                        q__[j] /= 1e4;
-                    }
-                    y[0] /= 1e4;
-                    y[1] /= 1e4;
 
-                    // WARNING(s);
-                } else { /* if overflow happened after the classical turning point, it's ok */
-                    last = p.ir;
-                    break;
-                }
+            if (y[0] * p__[p.ir] < 0) {
+                renorm = true;
+                std::cout << "node found at point " << t1 <<", can renormalize; y[0]=" << y[0] << ", p[ir]=" << p__[p.ir] << std::endl;
             }
 
             p__[p.ir + 1] = y[0];
             q__[p.ir + 1] = y[1];
+
+            if (std::abs(y[0]) > 1e6) {
+                if (!bound_state__) {
+                    RTE_THROW("overflow happened");
+                }
+                if (renorm) {
+                    for (int j = 0; j <= p.ir + 1; j++) {
+                        p__[j] /= 1e6;
+                        q__[j] /= 1e6;
+                    }
+                    y[0] /= 1e6;
+                    y[1] /= 1e6;
+                    renorm = false;
+                    std::cout << "renormalized at point " << t1 << std::endl;
+                    //h = radial_grid_.dx(p.ir) / 10.0;
+                } else {
+                    last_point = p.ir + 1;
+                    break;
+                }
+            }
         }
         gsl_odeiv2_evolve_free(e);
         gsl_odeiv2_control_free(c);
         gsl_odeiv2_step_free(s);
+        std::cout << "Done. Last point=" <<last_point << std::endl;
 
         //gsl_odeiv2_driver_free(d);
 
-        if (last) {
-            /* find the minimum value of the "tail" */
-            double pmax = std::abs(p__[last]);
-            /* go towards the origin */
-            for (int j = last; j >= 0; j--) {
-                if (std::abs(p__[j]) < pmax) {
-                    pmax = std::abs(p__[j]);
-                } else {
-                    /* we may go through zero here and miss one node,
-                     * so stay on the safe side with one extra point */
-                    last = j + 1;
+        if (bound_state__) {
+            for (int j = last_point; j >= 1; j--) {
+                if ((p__[j] * p__[j - 1] < 0) ||
+                    ((std::abs(p__[j]) < std::abs(p__[j - 1])) && (p__[j] * p__[j - 1] > 0))) {
+                    last_point = j;
                     break;
                 }
             }
-            /* zero the tail */
-            for (int j = last; j < radial_grid_.num_points(); j++) {
-                p__[j] = 0;
-                q__[j] = 0;
-            }
         }
 
-        int nr = radial_grid_.num_points();
         double ll_half = l__ * (l__ + 1) / 2.0;
 
         /* get number of nodes */
         int nn{0};
-        for (int i = 0; i < nr - 1; i++) {
+        for (int i = 0; i < last_point; i++) {
             if (p__[i] * p__[i + 1] < 0.0) {
                 nn++;
             }
         }
+        for (int i = last_point + 1; i < radial_grid_.num_points(); i++) {
+            p__[i] = 0.0;
+            q__[i] = 0.0;
+            dpdr__[i] = 0.0;
+            dqdr__[i] = 0.0;
+        }
 
-        for (int i = 0; i < nr; i++) {
+        for (int i = 0; i <= last_point; i++) {
             double V  = ve_(i) - zn_ * radial_grid_.x_inv(i);
             //double M  = rel_mass(enu__, V);
             double v1 = ll_half / std::pow(radial_grid_[i], 2);
@@ -823,7 +819,6 @@ class Radial_solver
     //==     return nn;
     //== }
 
-  public:
     Radial_solver(int zn__, std::vector<double> const& v__, Radial_grid<double> const& radial_grid__)
         : zn_(zn__)
         , radial_grid_(radial_grid__)
@@ -1043,6 +1038,118 @@ class Bound_state : public Radial_solver
 
     std::vector<double> dpdr_;
 
+    void solve_v2(relativity_t rel__, double enu_start__)
+    {
+        int np = num_points();
+
+        Spline<double> chi_p(radial_grid());
+        Spline<double> chi_q(radial_grid());
+
+        std::vector<double> p(np);
+        std::vector<double> q(np);
+        std::vector<double> dqdr(np);
+        std::vector<double> rdudr(np);
+        dpdr_ = std::vector<double>(np);
+
+        enu_ = enu_start__;
+        double de{0.1};
+
+        int nn = this->integrate_forward_gsl(enu_, l_, 0, chi_p, chi_q, p, dpdr_, q, dqdr, true);
+
+        double emin, emax;
+        if (nn > n_ - l_ - 1) {
+            emax = enu_;
+            int count{0};
+            while (nn > n_ - l_ - 1)  {
+                enu_ -= de;
+                de *= 1.3;
+                nn = this->integrate_forward_gsl(enu_, l_, 0, chi_p, chi_q, p, dpdr_, q, dqdr, true);
+                count++;
+                if (count > 1000) {
+                    RTE_THROW("can't find emin");
+                }
+            }
+            emin = enu_;
+        }
+        if (nn <= n_ - l_ - 1) {
+            emin = enu_;
+            int count{0};
+            while (nn <= n_ - l_ - 1)  {
+                enu_ += de;
+                de *= 1.3;
+                nn = this->integrate_forward_gsl(enu_, l_, 0, chi_p, chi_q, p, dpdr_, q, dqdr, true);
+                count++;
+                if (count > 1000) {
+                    RTE_THROW("can't find emax");
+                }
+            }
+            emax = enu_;
+        }
+
+        int count{0};
+        while (true) {
+            enu_ = (emin + emax) / 2.0;
+            nn = this->integrate_forward_gsl(enu_, l_, 0, chi_p, chi_q, p, dpdr_, q, dqdr, true);
+            if (nn <= n_ - l_ - 1) {
+                emin = enu_;
+            } else {
+                emax = enu_;
+            }
+            if (std::abs(emin - emax) < enu_tolerance_ && nn == n_ - l_ - 1) {
+                break;
+            }
+            count++;
+            if (count > 1000) {
+                RTE_THROW("can't find enu");
+            }
+        }
+        for (int i = 0; i < np; i++) {
+            p_(i)     = p[i];
+            q_(i)     = q[i];
+            u_(i)     = p[i] * radial_grid_.x_inv(i);
+            rdudr_(i) = rdudr[i];
+        }
+        p_.interpolate();
+        q_.interpolate();
+        u_.interpolate();
+        rdudr_.interpolate();
+
+        /* p is not divided by r, so we integrate with r^0 prefactor */
+        double norm = inner(p_, p_, 0);
+        //if (rel__ == relativity_t::dirac) {
+        //    norm += inner(q_, q_, 0);
+        //}
+
+        norm = 1.0 / std::sqrt(norm);
+        p_.scale(norm);
+        q_.scale(norm);
+        u_.scale(norm);
+        rdudr_.scale(norm);
+
+        //if (nn != (n_ - l_ - 1)) {
+        //    FILE* fout = fopen("p.dat", "w");
+        //    for (int ir = 0; ir < np; ir++) {
+        //        double x = radial_grid(ir);
+        //        fprintf(fout, "%12.6f %16.8f\n", x, p_(ir));
+        //    }
+        //    fclose(fout);
+
+        //    std::stringstream s;
+        //    s << "n = " << n_ << std::endl
+        //      << "l = " << l_ << std::endl
+        //      << "enu = " << enu_ << std::endl
+        //      << "wrong number of nodes : " << nn << " instead of " << (n_ - l_ - 1);
+        //    throw std::runtime_error(s.str());
+        //}
+
+        for (int i = 0; i < np; i++) {
+            rho_(i) += std::pow(u_(i), 2);
+            //if (rel__ == relativity_t::dirac) {
+            //    rho_(i) += std::pow(q_(i) * radial_grid_.x_inv(i), 2);
+            //}
+        }
+    }
+
     void solve(relativity_t rel__, double enu_start__)
     {
         int np = num_points();
@@ -1203,7 +1310,8 @@ class Bound_state : public Radial_solver
         , rdudr_(radial_grid__)
         , rho_(radial_grid__)
     {
-        solve(rel__, enu_start__);
+        solve_v2(rel__, enu_start__);
+        //solve(rel__, enu_start__);
     }
 
     inline double enu() const

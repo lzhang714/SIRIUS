@@ -15,6 +15,7 @@ def get_upf_version(upf):
 
 def parse_upf_from_string(upf_str):
     version = get_upf_version(upf_str)
+    print(f"UPF version: {version}")
     if version == 0:
         return None
     if version == 1:

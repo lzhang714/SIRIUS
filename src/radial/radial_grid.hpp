@@ -27,6 +27,7 @@
 
 #include "memory.hpp"
 #include "SDDK/type_definition.hpp"
+#include "utils/rte.hpp"
 
 namespace sirius {
 
@@ -339,9 +340,6 @@ Radial_grid<T> Radial_grid_factory(radial_grid_t grid_type__, int num_points__, 
             rgrid = Radial_grid_lin_exp<T>(num_points__, rmin__, rmax__, p__);
             break;
         }
-        default: {
-            throw std::runtime_error("wrong radial grid type");
-        }
     }
     return rgrid;
 };
@@ -352,7 +350,7 @@ inline std::pair<radial_grid_t, double> get_radial_grid_t(std::string str__)
     if (pos == std::string::npos) {
         std::stringstream s;
         s << "wrong string for the radial grid type: " << str__;
-        throw std::runtime_error(s.str());
+        RTE_THROW(s);
     }
 
     std::string name = str__.substr(0, pos);
