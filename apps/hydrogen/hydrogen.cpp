@@ -34,12 +34,12 @@ int main(int argn, char** argv)
     printf("Energy of {n,l} states is En = -(1/2) * z^2 / n^2 \n");
     printf("\n");
 
-    int num_points{10000};
+    int num_points{3000};
     if (args.exist("num_points")) {
         num_points = args.value<int>("num_points");
     }
 
-    std::string grid_t{"power, 2.0"};
+    std::string grid_t{"power, 3.0"};
     if (args.exist("grid_type")) {
         grid_t = args.value<std::string>("grid_type");
     }
@@ -81,35 +81,40 @@ int main(int argn, char** argv)
     //
     //std::vector<double> err(levels.size());
     //
-    for (int c = 0; c < 10; c++) {
+    for (int c = 0; c <= 10; c++) {
         int z = 1 + c * 10;
 
-        auto radial_grid = Radial_grid_factory<double>(gt.first, num_points, rmin, rmax + z * 2.0, gt.second);
-
-        std::cout << "z=" << z << ", rmin=" << radial_grid.first() << ", rmax=" << radial_grid.last()
-                  << ", num_points=" << radial_grid.num_points() << std::endl;
-
-        std::vector<double> v(radial_grid.num_points());
-        for (int i = 0; i < radial_grid.num_points(); i++) {
-            v[i] = -z / radial_grid[i];
-        }
 
         for (int n = 1; n <= 5 + c; n++) {
+
+            double rmax1 = 20.0 / (c + 1) + 5.0 * n * n / z;
+
+            auto radial_grid = Radial_grid_factory<double>(gt.first, num_points, rmin, rmax1, gt.second);
+
+            std::cout << "z=" << z << ", rmin=" << radial_grid.first() << ", rmax=" << radial_grid.last()
+                      << ", num_points=" << radial_grid.num_points() << std::endl;
+
+            std::vector<double> v(radial_grid.num_points());
+            for (int i = 0; i < radial_grid.num_points(); i++) {
+                v[i] = -z / radial_grid[i];
+            }
+
             double enu_exact = -0.5 * std::pow(double(z) / n, 2);
             std::cout << "  n=" << n << ", enu=" << enu_exact << std::endl;
 
+            #pragma omp parallel
             for (int l = 0; l <= n - 1; l++) {
                 try {
-                    Bound_state bound_state(relativity_t::none, z, n, l, 0, radial_grid, v, enu_exact);
+                    Bound_state bound_state(relativity_t::none, z, n, l, 0, radial_grid, v, enu_exact - 0.1);
 
                     double enu = bound_state.enu();
 
                     double rel_err = std::abs(enu - enu_exact) / std::abs(enu_exact);
 
+                    #pragma omp critical
                     std::cout << "    l=" << l << ", err=" << rel_err << std::endl;
                 } catch (std::runtime_error const& e) {
-                    std::cout << "Error" << std::endl
-                              << e.what() << std::endl;
+                    std::cout << e.what() << std::endl;
                 } catch (...) {
                     std::cout << "unknown error" << std::endl;
                 }

@@ -34,7 +34,7 @@ void test_radial_solver_v2()
 {
     auto rgrid = Radial_grid_factory<double>(radial_grid_t::power, 10000, 1e-7, 222.0, 2);
 
-    int zn{11};
+    int zn{100};
     std::vector<double> v(rgrid.num_points());
     for (int ir = 0; ir < rgrid.num_points(); ir++) {
         v[ir] = -zn * rgrid.x_inv(ir);
@@ -48,11 +48,11 @@ void test_radial_solver_v2()
     std::vector<double> dqdr(rgrid.num_points());
     Spline<double> chiq(rgrid);
 
-    double enu{-2.42};
+    double enu{-12.5};
     double de{0.1};
 
-    int l{4};
-    int n{5};
+    int l{19};
+    int n{20};
     //rsolver.integrate_forward_rk4<relativity_t::none, true>(-0.125, l, 0, chip, chiq, p, dpdr, q, dqdr);
     int nn = rsolver.integrate_forward_gsl(enu, l, 0, chip, chiq, p, dpdr, q, dqdr, true);
     std::cout << "enu="<<enu<<", nn="<<nn<<std::endl;
@@ -114,7 +114,7 @@ void test_radial_solver_v2()
     //}
     //
 
-    Bound_state bs(relativity_t::none, zn, n, l, 0, rgrid, v, enu);
+    //Bound_state bs(relativity_t::none, zn, n, l, 0, rgrid, v, enu);
 
 
     std::stringstream s;

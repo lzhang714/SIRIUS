@@ -162,18 +162,23 @@ class Free_atom : public sirius::Atom_type
                 for (int ist = 0; ist < num_atomic_levels(); ist++) {
                     //relativity_t rt = (rel) ? relativity_t::koelling_harmon : relativity_t::none;
                     relativity_t        rt = (rel) ? relativity_t::dirac : relativity_t::none;
-                    sirius::Bound_state bound_state(rt, zn(), atomic_level(ist).n, atomic_level(ist).l,
-                                                    atomic_level(ist).k, radial_grid(), veff, enu[ist]);
-                    enu[ist]     = bound_state.enu();
-                    auto& bs_rho = bound_state.rho();
-                    auto& bs_u   = bound_state.u();
+                    try {
+                        sirius::Bound_state bound_state(rt, zn(), atomic_level(ist).n, atomic_level(ist).l,
+                                                        atomic_level(ist).k, radial_grid(), veff, enu[ist]);
+                        enu[ist]     = bound_state.enu();
+                        auto& bs_rho = bound_state.rho();
+                        auto& bs_u   = bound_state.u();
 
-                    /* assume a spherical symmetry */
-                    for (int i = 0; i < np; i++) {
-                        free_atom_orbital_density_(i, ist) = bs_rho(i);
-                        free_atom_wave_functions_(i, ist)  = bs_u(i);
-                        /* sum of squares of spherical harmonics for angular momentm l is (2l+1)/4pi */
-                        rho_t[i] += atomic_level(ist).occupancy * free_atom_orbital_density_(i, ist) / fourpi;
+                        /* assume a spherical symmetry */
+                        for (int i = 0; i < np; i++) {
+                            free_atom_orbital_density_(i, ist) = bs_rho(i);
+                            free_atom_wave_functions_(i, ist)  = bs_u(i);
+                            /* sum of squares of spherical harmonics for angular momentm l is (2l+1)/4pi */
+                            rho_t[i] += atomic_level(ist).occupancy * free_atom_orbital_density_(i, ist) / fourpi;
+                        }
+                    } catch (std::runtime_error const& e) {
+                        std::cout << e.what();
+                        RTE_THROW("error searching for a bound state", e.what());
                     }
                 }
 

@@ -205,7 +205,7 @@ class Radial_solver
 
         gsl_odeiv2_system sys = {func, jac, 2, &p};
 
-        const double epsabs = 1e-6;
+        const double epsabs = 1e-8;
         const gsl_odeiv2_step_type* T = gsl_odeiv2_step_rk8pd;
         gsl_odeiv2_step* s = gsl_odeiv2_step_alloc(T, 2);
         gsl_odeiv2_control* c = gsl_odeiv2_control_y_new(epsabs, 0.0);
@@ -255,7 +255,6 @@ class Radial_solver
 
             if (y[0] * p__[p.ir] < 0) {
                 renorm = true;
-                std::cout << "node found at point " << t1 <<", can renormalize; y[0]=" << y[0] << ", p[ir]=" << p__[p.ir] << std::endl;
             }
 
             p__[p.ir + 1] = y[0];
@@ -273,8 +272,7 @@ class Radial_solver
                     y[0] /= 1e6;
                     y[1] /= 1e6;
                     renorm = false;
-                    std::cout << "renormalized at point " << t1 << std::endl;
-                    //h = radial_grid_.dx(p.ir) / 10.0;
+                    h = radial_grid_.dx(p.ir) / 10.0;
                 } else {
                     last_point = p.ir + 1;
                     break;
@@ -284,7 +282,6 @@ class Radial_solver
         gsl_odeiv2_evolve_free(e);
         gsl_odeiv2_control_free(c);
         gsl_odeiv2_step_free(s);
-        std::cout << "Done. Last point=" <<last_point << std::endl;
 
         //gsl_odeiv2_driver_free(d);
 
@@ -412,6 +409,8 @@ class Radial_solver
 
         /* r->0 asymptotics */
         if (rel != relativity_t::dirac) {
+            //p__[0] = std::pow(x2, l__ + 1);
+            //q__[0] = 0.5 * std::pow(x2, l__) * l__;
             if (l__ == 0) {
                 p__[0] = 2 * zn_ * x2;
                 q__[0] = -std::pow(zn_, 2) * x2;
@@ -1056,6 +1055,11 @@ class Bound_state : public Radial_solver
 
         int nn = this->integrate_forward_gsl(enu_, l_, 0, chi_p, chi_q, p, dpdr_, q, dqdr, true);
 
+        int nn_start{nn};
+
+        int nn0{nn};
+        double emin0, emax0;
+
         double emin, emax;
         if (nn > n_ - l_ - 1) {
             emax = enu_;
@@ -1070,6 +1074,9 @@ class Bound_state : public Radial_solver
                 }
             }
             emin = enu_;
+            nn0 = nn;
+            emin0 = emin;
+            emax0 = emax;
         }
         if (nn <= n_ - l_ - 1) {
             emin = enu_;
@@ -1084,6 +1091,9 @@ class Bound_state : public Radial_solver
                 }
             }
             emax = enu_;
+            nn0 = nn;
+            emin0 = emin;
+            emax0 = emax;
         }
 
         int count{0};
@@ -1100,7 +1110,15 @@ class Bound_state : public Radial_solver
             }
             count++;
             if (count > 1000) {
-                RTE_THROW("can't find enu");
+                std::stringstream s;
+                s << "can't find enu after 1000 bisections for n=" << n_ << ", l=" << l_ << std::endl
+                  << "  starting conditions: " << std::endl
+                  << "    enu_start, nodes = " << enu_start__ << ", " << nn_start << std::endl
+                  << "    emin, emax, nodes = " << emin0 << ", " << emax0 << ", " << nn0 << std::endl
+                  << "  last values: " << std::endl
+                  << "    enu, nodes = " << enu_ << ", " << nn << std::endl
+                  << "    emin, emax, emax - emin = " << emin << ", " << emax << emax - emin;
+                RTE_THROW(s);
             }
         }
         for (int i = 0; i < np; i++) {
@@ -1211,7 +1229,7 @@ class Bound_state : public Radial_solver
             std::stringstream s;
             s << "enu is not converged for n = " << n_ << " and l = " << l_ << std::endl
               << "enu = " << enu_ << ", denu = " << denu;
-            throw std::runtime_error(s.str());
+            RTE_THROW(s);
         }
 
         /* compute r * u'(r) */
@@ -1310,8 +1328,8 @@ class Bound_state : public Radial_solver
         , rdudr_(radial_grid__)
         , rho_(radial_grid__)
     {
-        solve_v2(rel__, enu_start__);
-        //solve(rel__, enu_start__);
+        // solve_v2(rel__, enu_start__);
+        solve(rel__, enu_start__);
     }
 
     inline double enu() const
